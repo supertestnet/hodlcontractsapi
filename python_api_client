@@ -1,0 +1,144 @@
+import requests
+import json
+
+def makeUser( email, password ):
+    payload = {
+        "email": email,
+        "password": password
+    }
+    r = requests.post( "https://app.lightningescrow.io/setuser/v2/", json = payload )
+    print( r.text )
+
+def getSession( email, password ):
+    payload = {
+        "email": email,
+        "password": password
+    }
+    r = requests.post( "https://app.lightningescrow.io/login/v2/", json = payload )
+    j = json.loads( r.text )
+    return j[ "session" ]
+
+#makeUser( "supertestnet+swaptest1@lightningescrow.io", "!HvJ6eMRLXkhbH1lxbC40ag5l6^NJ7P@yjGSVTl1bBv9Fy0hhcpYuLvst@RIi$w7nd5PVB@wWdCEbQ6KxUVF$4hsnHbF%cnCwRO" )
+
+def extendSession( session_id ):
+    r = requests.get( "https://app.lightningescrow.io/extend-session/?session_id=" + session_id )
+    j = json.loads( r.text )
+    return r.text
+
+#print( extendSession( ( getSession( "presidentlincoln@example.com", "hunter12" ) ) ) )
+
+def makeTx( session_id, buyer_email, goods_or_services, title, description, fee_payer, amount ):
+    payload = {
+        "session_id": session_id,
+        "buyer_email": buyer_email,
+        "goods_or_services": goods_or_services,
+        "title": title,
+        "description": description,
+        "fee_payer": fee_payer,
+        "amount": amount
+    }
+    r = requests.post( "https://app.lightningescrow.io/settx/v2/", json = payload )
+    j = json.loads( r.text )
+    return j[ "status" ]
+
+#print( makeTx( getSession( "presidentlincoln@example.com", "hunter12" ), "presidentlincoln@example.com", "goods", "test tx 1", "just a test transaction", "seller", 6000 ) )
+
+def getAllTransactions( session_id ):
+    payload = {
+        "session_id": session_id
+    }
+    r = requests.post( "https://app.lightningescrow.io/getallusertxs/v2/", json = payload )
+    j = json.loads( r.text )
+    return r.text
+
+#print( getAllTransactions( getSession( "presidentlincoln@example.com", "hunter12" ) ) )
+
+def getSingleTransaction( session_id, tx ):
+    payload = {
+        "session_id": session_id,
+        "tx": tx
+    }
+    r = requests.post( "https://app.lightningescrow.io/gettx/v2/", json = payload )
+    j = json.loads( r.text )
+    return r.text
+
+#print( getSingleTransaction( getSession( "presidentlincoln@example.com", "hunter12" ), 40 ) )
+
+def setInvoice( session_id, invoice, tx ):
+    payload = {
+        "session_id": session_id,
+        "invoice": invoice,
+        "tx": tx
+    }
+    r = requests.post( "https://app.lightningescrow.io/setinvoice/v2/", json = payload )
+    j = json.loads( r.text )
+    return j[ "status" ]
+
+#print( setInvoice( getSession( "presidentlincoln@example.com", "hunter12" ), "lnbc60u1p3zhu09pp5pd92vzrhqqe8dhh6kr252t69mr902r38vfkgu4njmu226fcltu3sdqqcqzpgxqyz5vqsp5qlphxqhz77vxj80gavl8gsl8qxmvsj4qpzgjvc3l4y08njvepc5q9qyyssq6huuzwyc7v2ysaukxezsytp27mucapf4ea5sffsf4sf6tqj8dl8zrgwmerqhlzn9lgdl2yll8l4c0hz94ammcg3cvq9z6hyxeayjg9qqthv2ml", 40 ) )
+
+def setBuyer( email, password, tx ):
+    payload = {
+        "email": email,
+        "password": password,
+        "tx": tx
+    }
+    r = requests.post( "https://app.lightningescrow.io/login/v2/", json = payload )
+    j = json.loads( r.text )
+    return r.text
+
+#print( setBuyer( "presidentlincoln@example.com", "hunter12", 40 ) )
+
+def claimsFunded( session_id, tx ):
+    payload = {
+        "session_id": session_id,
+        "tx": tx
+    }
+    r = requests.post( "https://app.lightningescrow.io/buyerpaid/v2/", json = payload )
+    j = json.loads( r.text )
+    return j[ "status" ]
+
+#print( claimsFunded( getSession( "presidentlincoln@example.com", "hunter12" ), 40 ) )
+
+def confirmFunded( session_id, tx ):
+    payload = {
+        "session_id": session_id,
+        "tx": tx
+    }
+    r = requests.post( "https://app.lightningescrow.io/confirmpayment/v2/", json = payload )
+    j = json.loads( r.text )
+    return j[ "status" ]
+
+#print( confirmFunded( getSession( "presidentlincoln@example.com", "hunter12" ), 40 ) )
+
+def goodsSent( session_id, tx ):
+    payload = {
+        "session_id": session_id,
+        "tx": tx
+    }
+    r = requests.post( "https://app.lightningescrow.io/goodssent/v2/", json = payload )
+    j = json.loads( r.text )
+    return j[ "status" ]
+
+#print( goodsSent( getSession( "presidentlincoln@example.com", "hunter12" ), 40 ) )
+
+def goodsReceived( session_id, tx ):
+    payload = {
+        "session_id": session_id,
+        "tx": tx
+    }
+    r = requests.post( "https://app.lightningescrow.io/goodsreceived/v2/", json = payload )
+    j = json.loads( r.text )
+    return j[ "status" ]
+
+#print( goodsReceived( getSession( "presidentlincoln@example.com", "hunter12" ), 40 ) )
+
+def settleContract( session_id, tx ):
+    payload = {
+        "session_id": session_id,
+        "tx": tx
+    }
+    r = requests.post( "https://app.lightningescrow.io/getpreimage/v2/", json = payload )
+    j = json.loads( r.text )
+    return j[ "preimage" ]
+
+#print( settleContract( getSession( "presidentlincoln@example.com", "hunter12" ), 40 ) )
