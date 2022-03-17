@@ -1,5 +1,9 @@
 # Lightning Escrow documentation
 
+# Video demo (sorry for the poor audio)
+
+[![](https://i.ibb.co/0FgRK0m/lnescrow-api-demo.png)](https://www.youtube.com/watch?v=OufAyoxfH9M)
+
 # Create user
 
 Endpoint: https://app.lightningescrow.io/setuser/v2/
