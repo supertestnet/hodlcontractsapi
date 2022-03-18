@@ -25,10 +25,11 @@ if file_exists:
         adminpassword = lines.split( '\n', 1 )[ 0 ]
 else:
     password = "password"
+    adminpassword = password
     with open( "password.txt", "w" ) as file:
         file.write( password )
 
-salt = password
+salt = adminpassword
 def sha256( string ):
     hash = hashlib.sha256( string.encode( 'utf-8' ) ).hexdigest()
     return hash
