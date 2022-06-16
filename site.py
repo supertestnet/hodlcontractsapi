@@ -13,6 +13,9 @@ from hashlib import sha256 as hexsha
 from flask import Flask, redirect, url_for, request, make_response, render_template, send_file, send_from_directory
 from flask_cors import CORS
 from os.path import exists
+from buidl.ecc import PrivateKey
+from buidl.pecc import S256Point
+from buidl.helper import big_endian_to_int
 
 with open( "mailgun-key.txt" ) as file:
     lines = file.read()
@@ -25,9 +28,9 @@ if file_exists:
         adminpassword = lines.split( '\n', 1 )[ 0 ]
 else:
     password = "password"
-    adminpassword = password
     with open( "password.txt", "w" ) as file:
         file.write( password )
+    adminpassword=password
 
 salt = adminpassword
 def sha256( string ):
@@ -35,10 +38,11 @@ def sha256( string ):
     return hash
 
 def hexhash( hex ):
+    """
     str = hex
     begin = 0
     end = 2
-    halfstrlength = len( str ) / 2
+    halfstrlength = int( len( str ) / 2 )
     newstr = ""
     for x in range( halfstrlength ):
         newstr = newstr + "\\x" + str[begin:end]
@@ -46,6 +50,8 @@ def hexhash( hex ):
         end = end + 2
     newstr = newstr + ""
     rawhex4 = newstr.decode( 'string-escape' )
+    """
+    rawhex4 = bytes.fromhex( hex )
     h1 = hexsha()
     h1.update(rawhex4)
     return h1.hexdigest()
@@ -70,7 +76,20 @@ def lookupuser( session_id ):
     session = cur.fetchone()
     sjson = json.dumps( session )
     con.close()
-    if ( session[ 1 ] < currenttime ):
+    if ( int( session[ 1 ] ) < currenttime ):
+        return
+    user = session[ 0 ]
+    return user
+
+def lookupbluser( session_id ):
+    currenttime = int( math.floor( time.time() ) )
+    con = sqlite3.connect( "lnescrow.db" )
+    cur = con.cursor()
+    cur.execute( "SELECT user, expiry from blsessions WHERE session_id = '" + session_id + "'" )
+    session = cur.fetchone()
+    sjson = json.dumps( session )
+    con.close()
+    if ( int( session[ 1 ] ) < int( currenttime ) ):
         return
     user = session[ 0 ]
     return user
@@ -104,6 +123,24 @@ def loginuser( user ):
     sjson = json.dumps( status )
     return sjson
 
+def loginbluser( user ):
+    session_id = makeRandomString()
+    currenttime = int( math.floor( time.time() ) )
+    session_expiry = currenttime + 604800
+    con = sqlite3.connect( "lnescrow.db" )
+    cur = con.cursor()
+    cur.execute( "INSERT INTO blsessions VALUES( :user, :session_id, :expiry )", { "user": str( user ), "session_id": str( session_id ), "expiry": str( session_expiry ) } )
+    con.commit()
+    con.close()
+    status = {
+        "status": "success",
+        "id": str( user ),
+        "session": str( session_id ),
+        "expiry": str( session_expiry )
+    }
+    sjson = json.dumps( status )
+    return sjson
+
 def isThereABuyer( tx_id ):
     tx_id = str( tx_id )
     con = sqlite3.connect( "lnescrow.db" )
@@ -115,6 +152,21 @@ def isThereABuyer( tx_id ):
     con.close()
     buyer = tdata[ "buyer" ]
     if ( not tdata[ "buyer" ] or tdata[ "buyer" ] == "" ):
+        return 0
+    else:
+        return 1
+
+def isThereABLBuyer( tx_id ):
+    tx_id = str( tx_id )
+    con = sqlite3.connect( "lnescrow.db" )
+    cur = con.cursor()
+    cur.execute( "SELECT transaction_data from bltransactions WHERE transaction_id = '" + tx_id + "'" )
+    transaction = cur.fetchone()
+    transaction = transaction[ 0 ]
+    tdata = json.loads( transaction )
+    con.close()
+    buyer = tdata[ "buyer_pubkey" ]
+    if ( not tdata[ "buyer_pubkey" ] or tdata[ "buyer_pubkey" ] == "" ):
         return 0
     else:
         return 1
@@ -152,6 +204,41 @@ def setbuyer( user, tx_id ):
                        { "transaction_data": tjson, "transaction_id": tx_id, "buyer": str( user ) } )
     con.commit()
 
+def setblbuyer( pubkey, eprivkey, tx_id, combined_pubkey ):
+    tx_id = str( tx_id )
+    con = sqlite3.connect( "lnescrow.db" )
+    cur = con.cursor()
+    cur.execute( "SELECT transaction_data from bltransactions WHERE transaction_id = '" + tx_id + "'" )
+    transaction = cur.fetchone()
+    transaction = transaction[ 0 ]
+    tdata = json.loads( transaction )
+    status = "needs seller ack"
+    buyer_ack = "ack"
+    con.close()
+    transaction = {
+        "id": tdata[ "id" ],
+        "created": tdata[ "created" ],
+        "expires": tdata[ "expires" ],
+        "user": tdata[ "user" ],
+        "buyer_pubkey": pubkey,
+        "seller_pubkey": tdata[ "seller_pubkey" ],
+        "escrow_pubkey": tdata[ "escrow_pubkey" ],
+        "seller_comms_pubkey": tdata[ "seller_comms_pubkey" ],
+        "fee_payer": tdata[ "fee_payer" ],
+        "amount": tdata[ "amount" ],
+        "seller_ack": "",
+        "buyer_ack": buyer_ack,
+        "combined_pubkey": combined_pubkey,
+        "buyer_encrypted_privkey": eprivkey,
+        "status": status,
+    }
+    tjson = json.dumps( transaction )
+    con = sqlite3.connect( "lnescrow.db" )
+    cur = con.cursor()
+    cur.execute( "UPDATE bltransactions SET transaction_data = :transaction_data, user = :user WHERE transaction_id = :transaction_id",
+                       { "transaction_data": tjson, "transaction_id": tx_id, "user": str( transaction[ "user" ] ) } )
+    con.commit()
+
 def sendemail( to, subject, body, attachment ):
     email_text = body
 
@@ -184,13 +271,13 @@ def sendemail( to, subject, body, attachment ):
             'attachment': attachment
         })
 
-    print 'Status: {0}'.format(request.status_code)
-    print 'Body:   {0}'.format(request.text)
+    print( 'Status: {0}'.format(request.status_code) )
+    print( 'Body:   {0}'.format(request.text) )
 
 def checkpmthash( invoice, desiredhash ):
     url = 'https://localhost:8080/v1/payreq/' + invoice
-    cert_path = '/root/.lnd/tls.cert'
-    macaroon = codecs.encode(open('/root/.lnd/data/chain/bitcoin/mainnet/admin.macaroon', 'rb').read(), 'hex')
+    cert_path = '/home/admin/.lnd/tls.cert'
+    macaroon = codecs.encode(open('/home/admin/.lnd/data/chain/bitcoin/mainnet/admin.macaroon', 'rb').read(), 'hex')
     headers = {'Grpc-Metadata-macaroon': macaroon}
     r = requests.get(url, headers=headers, verify=cert_path)
     pmtdata = r.json()
@@ -199,6 +286,30 @@ def checkpmthash( invoice, desiredhash ):
         return 1
     else:
         return 0
+
+def getPubkeyFromPrivkey( privkey ):
+    print( privkey )
+    h = bytes.fromhex( privkey )
+    private_key = PrivateKey( secret=big_endian_to_int( h ), network="mainnet" )
+    pubkeypoint = private_key.point
+    pubkey = str( pubkeypoint.sec( compressed=True ).hex() )
+    return pubkey
+
+def getSmallPrivkey():
+    h = bytes.fromhex( makeRandomString() )
+    private_key = PrivateKey( secret=big_endian_to_int( h ), network="mainnet" )
+    privkey = str( hex( private_key.secret ) )[ 2: ]
+    if ( privkey[ 0:1 ] != "1" ):
+        return getSmallPrivkey()
+    if ( privkey[ 1:2 ] != "1" and privkey[ 1:2 ] != "2" and privkey[ 1:2 ] != "3" and privkey[ 1:2 ] != "4" and privkey[ 1:2 ] != "5" ):
+        return getSmallPrivkey()
+    return privkey
+
+def getAddressFromCompressedPubkey( cpubkey="02d20af30877d3e0f197c06a8af5b6541fa5de5e479991a5610b56b59f32bf1db9" ):
+    h = bytes.fromhex( cpubkey )
+    public_key = S256Point.parse( h )
+    pubkey2 = str( public_key.p2wpkh_address( network="mainnet" ) )
+    return pubkey2
 
 def initdbs():
     file_exists = exists( "lnescrow.db" )
@@ -236,6 +347,42 @@ def initdbs():
     con = sqlite3.connect( "lnescrow.db" )
     cur = con.cursor()
     cur.execute( """CREATE TABLE IF NOT EXISTS sessions (
+        user text,
+        session_id text,
+        expiry text
+        )""" )
+    con.commit()
+    con.close()
+    con = sqlite3.connect( "lnescrow.db" )
+    cur = con.cursor()
+    cur.execute( """CREATE TABLE IF NOT EXISTS bltransactions (
+        transaction_data text,
+        transaction_id text,
+        user text
+        )""" )
+    con.commit()
+    con.close()
+    con = sqlite3.connect( "lnescrow.db" )
+    cur = con.cursor()
+    cur.execute( """CREATE TABLE IF NOT EXISTS blkeys (
+        transaction_id text,
+        escrow_privkey text,
+        seller_privkey text
+        )""" )
+    con.commit()
+    con.close()
+    con = sqlite3.connect( "lnescrow.db" )
+    cur = con.cursor()
+    cur.execute( """CREATE TABLE IF NOT EXISTS blusers (
+        user text,
+        user_id text,
+        authkey text
+        )""" )
+    con.commit()
+    con.close()
+    con = sqlite3.connect( "lnescrow.db" )
+    cur = con.cursor()
+    cur.execute( """CREATE TABLE IF NOT EXISTS blsessions (
         user text,
         session_id text,
         expiry text
@@ -325,12 +472,120 @@ def setuserv2():
             setbuyer( int( user[ "id" ] ), int( request.json[ "tx" ] ) )
     return sjson
 
-@app.route( '/getuser/', methods=[ 'POST', 'GET' ] )
-def getuser():
+@app.route( '/setuser/v3', methods=[ 'POST', 'GET' ] )
+@app.route( '/setuser/v3/', methods=[ 'POST', 'GET' ] )
+def setuserv3():
+    con = sqlite3.connect( "lnescrow.db" )
+    cur = con.cursor()
+    cur.execute( "SELECT user from blusers" )
+    users = cur.fetchall()
+    con.close()
+    count = len( users )
+    id = count
+    authkey = sha256( str( request.json[ "authkey" ] ) + salt )
+    joined = str( int( math.floor( time.time() ) ) )
+    user = {
+        "id": id,
+        "authkey": authkey,
+        "joined": joined
+    }
+    ujson = json.dumps( user )
+    con = sqlite3.connect( "lnescrow.db" )
+    cur = con.cursor()
+    cur.execute( "INSERT INTO blusers VALUES( :user, :user_id, :authkey )", { "user": ujson, "user_id": str( user[ "id" ] ), "authkey": str( user[ "authkey" ] ) } )
+    con.commit()
+    con.close()
+    sjson = loginbluser( str( user[ "id" ] ) )
+    return sjson
+
+@app.route( '/setbuyer/v3', methods=[ 'POST', 'GET' ] )
+@app.route( '/setbuyer/v3/', methods=[ 'POST', 'GET' ] )
+def setbuyerv3():
+    session_id = request.json[ "session_id" ]
+    if not session_id:
+        return """{"status":"error", "message":"your session key is not valid"}"""
+    user = lookupbluser( session_id )
+    if not user:
+        return """{"status":"error", "message":"you are not a user"}"""
+    tx_id = str( request.json[ "tx" ] )
+    con = sqlite3.connect( "lnescrow.db" )
+    cur = con.cursor()
+    cur.execute( "SELECT transaction_data from bltransactions WHERE transaction_id = '" + tx_id + "'" )
+    transaction = cur.fetchone()
+    transaction = transaction[ 0 ]
+    tdata = json.loads( transaction )
+    con.close()
+    alloweduser = tdata[ "user" ]
+    queryinguser = lookupbluser( session_id )
+    if ( int( queryinguser ) != int( alloweduser ) ):
+        return """{"status":"error","message":"you are not authorized to accept this contract"}"""
+    buyer_pubkey = request.json[ "pubkey" ]
+    buyer_encrypted_privkey = request.json[ "eprivkey" ]
+    combined_pubkey = request.json[ "combined_pubkey" ]
+    if ( isThereABLBuyer( tx_id ) == 0 ):
+        setblbuyer( buyer_pubkey, buyer_encrypted_privkey, tx_id, combined_pubkey )
+        con = sqlite3.connect( "lnescrow.db" )
+        cur = con.cursor()
+        cur.execute( "SELECT transaction_data from bltransactions WHERE transaction_id = '" + tx_id + "'" )
+        transaction = cur.fetchone()
+        transaction = transaction[ 0 ]
+        tdata = json.loads( transaction )
+        con.close()
+        con = sqlite3.connect( "lnescrow.db" )
+        cur = con.cursor()
+        cur.execute( "SELECT escrow_privkey from blkeys WHERE transaction_id = '" + tx_id + "'" )
+        privkey = cur.fetchone()
+        privkey = privkey[ 0 ]
+        con.close()
+        transaction = {
+            "id": tdata[ "id" ],
+            "created": tdata[ "created" ],
+            "expires": tdata[ "expires" ],
+            "user": tdata[ "user" ],
+            "buyer_pubkey": tdata[ "buyer_pubkey" ],
+            "seller_pubkey": tdata[ "seller_pubkey" ],
+            "escrow_pubkey": tdata[ "escrow_pubkey" ],
+            "seller_comms_pubkey": tdata[ "seller_comms_pubkey" ],
+            "fee_payer": tdata[ "fee_payer" ],
+            "amount": tdata[ "amount" ],
+            "seller_ack": tdata[ "seller_ack" ],
+            "buyer_ack": tdata[ "buyer_ack" ],
+            "combined_pubkey": tdata[ "combined_pubkey" ],
+            "buyer_encrypted_privkey": tdata[ "buyer_encrypted_privkey" ],
+            "status": tdata[ "status" ]
+        }
+        tjson = json.dumps( transaction )
+        returnable = {
+            "status": "OK",
+            "escrow_privkey": privkey,
+            "data": {
+                "id": transaction[ "id" ],
+                "created": transaction[ "created" ],
+                "expires": transaction[ "expires" ],
+                "user": transaction[ "user" ],
+                "buyer_pubkey": transaction[ "buyer_pubkey" ],
+                "seller_pubkey": transaction[ "seller_pubkey" ],
+                "escrow_pubkey": transaction[ "escrow_pubkey" ],
+                "seller_comms_pubkey": transaction[ "seller_comms_pubkey" ],
+                "fee_payer": transaction[ "fee_payer" ],
+                "amount": transaction[ "amount" ],
+                "seller_ack": transaction[ "seller_ack" ],
+                "buyer_ack": transaction[ "buyer_ack" ],
+                "combined_pubkey": transaction[ "combined_pubkey" ],
+                "buyer_encrypted_privkey": transaction[ "buyer_encrypted_privkey" ],
+                "status": transaction[ "status" ]
+            }
+        }
+        return json.dumps( returnable )
+    else:
+        return '{"status":"error", "message":"this transaction already has a buyer"}'
+
+@app.route( '/getbluser/', methods=[ 'POST', 'GET' ] )
+def getbluser():
     user_id = request.args.get( "user" )
     con = sqlite3.connect( "lnescrow.db" )
     cur = con.cursor()
-    cur.execute( "SELECT user from users WHERE user_id = '" + user_id + "'" )
+    cur.execute( "SELECT user from blusers WHERE user_id = '" + user_id + "'" )
     user = cur.fetchone()
     user = user[ 0 ]
     con.close()
@@ -393,6 +648,7 @@ def settx():
         "fee_payer": fee_payer,
         "amount": amount,
         "status": status,
+        "invoice": "",
         "pmthash": hexhash( preimage ),
     }
     tjson = json.dumps( transaction )
@@ -495,6 +751,7 @@ def settxv2():
         "description": description,
         "fee_payer": fee_payer,
         "amount": amount,
+        "invoice": "",
         "status": status,
         "pmthash": hexhash( preimage ),
     }
@@ -531,6 +788,7 @@ def settxv2():
             "fee_payer": fee_payer,
             "amount": amount,
             "status": status,
+            "invoice": "",
             "pmthash": hexhash( preimage ),
         }
     }
@@ -1406,6 +1664,25 @@ def getallusertxsv2():
         alltransactions = "[]"
     return alltransactions
 
+@app.route( '/getallusertxs/v3', methods=[ 'POST', 'GET' ] )
+@app.route( '/getallusertxs/v3/', methods=[ 'POST', 'GET' ] )
+def getallusertxsv3():
+    session_id = request.json[ "session_id" ]
+    user = lookupbluser( session_id )
+    con = sqlite3.connect( "lnescrow.db" )
+    cur = con.cursor()
+    cur.execute( "SELECT transaction_data from bltransactions WHERE user = '" + user + "'" )
+    transactions = cur.fetchall()
+    alltransactions = "["
+    for transaction in transactions:
+        alltransactions += transaction[ 0 ] + ","
+    alltransactions = alltransactions[ 0:-1 ]
+    alltransactions += "]"
+    con.close()
+    if alltransactions == "]":
+        alltransactions = "[]"
+    return alltransactions
+
 @app.route( "/login", methods=[ 'POST', 'GET' ] )
 @app.route( "/login/", methods=[ 'POST', 'GET' ] )
 def attemptlogin():
@@ -1438,7 +1715,7 @@ def attemptlogin():
         if ( isThereABuyer( tx_id ) == 0 ):
             setbuyer( int( user_id ), int( request.form.get( "tx" ) ) )
 # If the user is already logged in, send back his current session id
-    if ( session[ 1 ] > currenttime ):
+    if ( int( session[ 1 ] ) > currenttime ):
         session_id = session[ 0 ]
         status = {
             "status": "success",
@@ -1488,7 +1765,7 @@ def attemptloginv2():
         else:
             return '{"status":"error", "message":"this transaction already has a buyer"}'
 # If the user is already logged in, send back his current session id
-    if ( session[ 1 ] > currenttime ):
+    if ( int( session[ 1 ] ) > currenttime ):
         session_id = session[ 0 ]
         status = {
             "status": "success",
@@ -1582,6 +1859,25 @@ def gettxv2():
         buyer = -1
     user = lookupuser( session_id )
     if ( int( user ) != int( seller ) and int( user ) != int( buyer ) ):
+        return ""
+    return transaction
+
+@app.route( '/gettx/v3', methods=[ 'POST', 'GET' ] )
+@app.route( '/gettx/v3/', methods=[ 'POST', 'GET' ] )
+def gettxv3():
+    tx_id = request.json[ "tx" ]
+    tx_id = str( tx_id )
+    session_id = request.json[ "session_id" ]
+    con = sqlite3.connect( "lnescrow.db" )
+    cur = con.cursor()
+    cur.execute( "SELECT transaction_data from bltransactions WHERE transaction_id = '" + tx_id + "'" )
+    transaction = cur.fetchone()
+    transaction = transaction[ 0 ]
+    tdata = json.loads( transaction )
+    con.close()
+    alloweduser = tdata[ "user" ]
+    queryinguser = lookupbluser( session_id )
+    if ( int( queryinguser ) != int( alloweduser ) ):
         return ""
     return transaction
 
@@ -1961,6 +2257,313 @@ def extendsessionkey():
 def favicon():
     return send_from_directory( os.path.join( app.root_path, 'static' ),
                                'favicon.ico', mimetype='image/vnd.microsoft.icon' )
+
+@app.route( '/setbltx', methods=[ 'POST', 'GET' ] )
+@app.route( '/setbltx/', methods=[ 'POST', 'GET' ] )
+def setbltx():
+    session_id = request.json[ "session_id" ]
+    if not session_id:
+        return """{"status":"error", "message":"your session key is not valid"}"""
+    user = lookupbluser( session_id )
+    if not user:
+        return """{"status":"error", "message":"you are not a user"}"""
+    if ( "seller_pubkey" in request.json ):
+        seller_pubkey = request.json[ "seller_pubkey" ]
+    else:
+        return """{"status":"error", "message":"you didn't provide a pubkey for the seller"}"""
+    if ( "seller_comms_pubkey" in request.json ):
+        seller_comms_pubkey = request.json[ "seller_comms_pubkey" ]
+    else:
+        return """{"status":"error", "message":"you didn't provide a communication pubkey for the seller"}"""
+    if ( "seller_privkey" in request.json ):
+        seller_privkey = request.json[ "seller_privkey" ]
+    else:
+        return """{"status":"error", "message":"you didn't provide a privkey for the seller"}"""
+    if ( getPubkeyFromPrivkey( seller_privkey ) != seller_pubkey ):
+        return """{"status":"error", "message":"your pubkey does not match your privkey"}"""
+    con = sqlite3.connect( "lnescrow.db" )
+    cur = con.cursor()
+    cur.execute( "SELECT transaction_data from bltransactions" )
+    transactions = cur.fetchall()
+    con.close()
+    count = len( transactions )
+    id = count
+    if ( "fee_payer" in request.json ):
+        fee_payer = request.json[ "fee_payer" ]
+    else:
+        fee_payer = "n/a"
+    if ( "amount" in request.json ):
+        amount = str( request.json[ "amount" ] )
+    else:
+        amount = "n/a"
+    created = int( math.floor( time.time() ) )
+    expires = created + 604800
+    status = "needs buyer"
+    escrow_privkey = getSmallPrivkey()
+    escrow_pubkey = getPubkeyFromPrivkey( escrow_privkey )
+    transaction = {
+        "id": id,
+        "created": created,
+        "expires": expires,
+        "user": user,
+        "buyer_pubkey": "",
+        "seller_pubkey": seller_pubkey,
+        "escrow_pubkey": escrow_pubkey,
+        "seller_comms_pubkey": seller_comms_pubkey,
+        "seller_ack": "",
+        "buyer_ack": "",
+        "combined_pubkey": "",
+        "buyer_encrypted_privkey": "",
+        "fee_payer": fee_payer,
+        "amount": amount,
+        "status": status,
+    }
+    tjson = json.dumps( transaction )
+    tnum = str( transaction[ "id" ] )
+    con = sqlite3.connect( "lnescrow.db" )
+    cur = con.cursor()
+    cur.execute( "INSERT INTO bltransactions VALUES( :transaction_data, :transaction_id, :user )", { "transaction_data": tjson, "transaction_id": str( transaction[ "id" ] ), "user": str( user ) } )
+    con.commit()
+    con = sqlite3.connect( "lnescrow.db" )
+    cur = con.cursor()
+    cur.execute( "INSERT INTO blkeys VALUES( :transaction_id, :escrow_privkey, :seller_privkey )", { "transaction_id": str( transaction[ "id" ] ), "escrow_privkey": str( escrow_privkey ), "seller_privkey": str( seller_privkey ) } )
+    con.commit()
+    con = sqlite3.connect( "lnescrow.db" )
+    cur = con.cursor()
+    cur.execute( "SELECT transaction_data from bltransactions WHERE transaction_id = '" + str( transaction[ "id" ] ) + "'" )
+    transaction = cur.fetchone()
+    transaction = transaction[ 0 ]
+    tdata = json.loads( transaction )
+    con.close()
+    status = {
+        "status": "success",
+        "data": {
+            "id": tdata[ "id" ],
+            "created": tdata[ "created" ],
+            "expires": tdata[ "expires" ],
+            "user": tdata[ "user" ],
+            "buyer_pubkey": tdata[ "buyer_pubkey" ],
+            "seller_pubkey": tdata[ "seller_pubkey" ],
+            "escrow_pubkey": tdata[ "escrow_pubkey" ],
+            "seller_comms_pubkey": tdata[ "seller_comms_pubkey" ],
+            "seller_ack": tdata[ "seller_ack" ],
+            "buyer_ack": tdata[ "buyer_ack" ],
+            "combined_pubkey": tdata[ "combined_pubkey" ],
+            "buyer_encrypted_privkey": tdata[ "buyer_encrypted_privkey" ],
+            "fee_payer": tdata[ "fee_payer" ],
+            "amount": tdata[ "amount" ],
+            "status": tdata[ "status" ],
+        }
+    }
+    sjson = json.dumps( status )
+    return sjson
+
+@app.route( '/sellerack', methods=[ 'POST', 'GET' ] )
+@app.route( '/sellerack/', methods=[ 'POST', 'GET' ] )
+def sellerack():
+    session_id = request.json[ "session_id" ]
+    if not session_id:
+        return ""
+    user = lookupbluser( session_id )
+    if not user:
+        return ""
+    if ( "tx" not in request.json ):
+        return ""
+    tx_id = str( request.json[ "tx" ] )
+    con = sqlite3.connect( "lnescrow.db" )
+    cur = con.cursor()
+    cur.execute( "SELECT transaction_data from bltransactions WHERE transaction_id = '" + tx_id + "'" )
+    transaction = cur.fetchone()
+    transaction = transaction[ 0 ]
+    tdata = json.loads( transaction )
+    con.close()
+    if ( tdata[ "user" ] != user ):
+        return """{"status": "error", "message": "you aren't the seller"}"""
+    seller_ack = "ack"
+    status = "all acks"
+    transaction = {
+        "id": tdata[ "id" ],
+        "created": tdata[ "created" ],
+        "expires": tdata[ "expires" ],
+        "user": tdata[ "user" ],
+        "buyer_pubkey": tdata[ "buyer_pubkey" ],
+        "seller_pubkey": tdata[ "seller_pubkey" ],
+        "escrow_pubkey": tdata[ "escrow_pubkey" ],
+        "seller_comms_pubkey": tdata[ "seller_comms_pubkey" ],
+        "seller_ack": seller_ack,
+        "buyer_ack": tdata[ "buyer_ack" ],
+        "combined_pubkey": tdata[ "combined_pubkey" ],
+        "buyer_encrypted_privkey": tdata[ "buyer_encrypted_privkey" ],
+        "fee_payer": tdata[ "fee_payer" ],
+        "amount": tdata[ "amount" ],
+        "status": status,
+    }
+    tjson = json.dumps( transaction )
+    tnum = str( transaction[ "id" ] )
+    con = sqlite3.connect( "lnescrow.db" )
+    cur = con.cursor()
+    cur.execute( "UPDATE bltransactions SET transaction_data = :transaction_data, user = :user WHERE transaction_id = :transaction_id",
+                       { "transaction_data": tjson, "transaction_id": str( transaction[ "id" ] ), "user": str( transaction[ "user" ] ) } )
+    con.commit()
+    con.close()
+    con = sqlite3.connect( "lnescrow.db" )
+    cur = con.cursor()
+    cur.execute( "SELECT transaction_data from bltransactions WHERE transaction_id = '" + str( transaction[ "id" ] ) + "'" )
+    transaction = cur.fetchone()
+    transaction = transaction[ 0 ]
+    tdata = json.loads( transaction )
+    con.close()
+    status = {
+        "status": "success",
+        "data": {
+            "id": tdata[ "id" ],
+            "created": tdata[ "created" ],
+            "expires": tdata[ "expires" ],
+            "user": tdata[ "user" ],
+            "buyer_pubkey": tdata[ "buyer_pubkey" ],
+            "seller_pubkey": tdata[ "seller_pubkey" ],
+            "escrow_pubkey": tdata[ "escrow_pubkey" ],
+            "seller_comms_pubkey": tdata[ "seller_comms_pubkey" ],
+            "seller_ack": tdata[ "seller_ack" ],
+            "buyer_ack": tdata[ "buyer_ack" ],
+            "combined_pubkey": tdata[ "combined_pubkey" ],
+            "buyer_encrypted_privkey": tdata[ "buyer_encrypted_privkey" ],
+            "fee_payer": tdata[ "fee_payer" ],
+            "amount": tdata[ "amount" ],
+            "status": tdata[ "status" ],
+        }
+    }
+    sjson = json.dumps( status )
+    return sjson
+
+@app.route( "/login/v3", methods=[ 'POST', 'GET' ] )
+@app.route( "/login/v3/", methods=[ 'POST', 'GET' ] )
+def attemptloginv3():
+    authkey = sha256( str( request.json[ "authkey" ] ) + salt )
+    con = sqlite3.connect( "lnescrow.db" )
+    cur = con.cursor()
+    cur.execute( "SELECT * from blusers WHERE authkey = '" + authkey + "'" )
+    user = cur.fetchone()
+    user_id = user[ 1 ]
+    user = user[ 0 ]
+    ujson = json.loads( user )
+    con.close()
+    currenttime = int( math.floor( time.time() ) )
+    con = sqlite3.connect( "lnescrow.db" )
+    cur = con.cursor()
+    cur.execute( "SELECT session_id, expiry from blsessions WHERE user = '" + user_id + "'" )
+    session = cur.fetchone()
+    con.close()
+# If the user is already logged in, send back his current session id
+    if ( int( session[ 1 ] ) > int( currenttime ) ):
+        session_id = session[ 0 ]
+        status = {
+            "status": "success",
+            "id": str( user_id ),
+            "session": str( session_id ),
+	    "expiry": str( session[ 1 ] )
+        }
+        sjson = json.dumps( status )
+        return sjson
+#If the user is not logged in, especially if they were logged in but their session id expired, log them in
+    else:
+        return loginuser( user_id )
+    return ""
+
+@app.route( '/getblkey', methods=[ 'POST', 'GET' ] )
+@app.route( '/getblkey/', methods=[ 'POST', 'GET' ] )
+def getblkey():
+    tx_id = request.json[ "tx" ]
+    tx_id = str( tx_id )
+    winner = request.json[ "winner" ]
+    winner = str( winner )
+    session_id = request.json[ "session_id" ]
+    con = sqlite3.connect( "lnescrow.db" )
+    cur = con.cursor()
+    cur.execute( "SELECT escrow_privkey from blkeys WHERE transaction_id = '" + tx_id + "'" )
+    escrow_privkey = cur.fetchone()
+    escrow_privkey = escrow_privkey[ 0 ]
+    con.close()
+    con = sqlite3.connect( "lnescrow.db" )
+    cur = con.cursor()
+    cur.execute( "SELECT seller_privkey from blkeys WHERE transaction_id = '" + tx_id + "'" )
+    seller_privkey = cur.fetchone()
+    seller_privkey = seller_privkey[ 0 ]
+    con.close()
+    con = sqlite3.connect( "lnescrow.db" )
+    cur = con.cursor()
+    cur.execute( "SELECT transaction_data from bltransactions WHERE transaction_id = '" + tx_id + "'" )
+    transaction = cur.fetchone()
+    transaction = transaction[ 0 ]
+    tdata = json.loads( transaction )
+    con.close()
+    if ( tdata[ "status" ] == "funds received" ):
+        return """{"status":"error","message":"this transaction was already settled so you cannot settle it again. Just in case you are curious, the privkeys we know are as follows. Escrow privkey: %s. Seller privkey: %s."}""" % ( escrow_privkey, seller_privkey )
+    status = "funds received"
+    transaction = {
+        "id": tdata[ "id" ],
+        "created": tdata[ "created" ],
+        "expires": tdata[ "expires" ],
+        "user": tdata[ "user" ],
+        "buyer_pubkey": tdata[ "buyer_pubkey" ],
+        "seller_pubkey": tdata[ "seller_pubkey" ],
+        "escrow_pubkey": tdata[ "escrow_pubkey" ],
+        "seller_comms_pubkey": tdata[ "seller_comms_pubkey" ],
+        "seller_ack": tdata[ "seller_ack" ],
+        "buyer_ack": tdata[ "buyer_ack" ],
+        "combined_pubkey": tdata[ "combined_pubkey" ],
+        "buyer_encrypted_privkey": tdata[ "buyer_encrypted_privkey" ],
+        "fee_payer": tdata[ "fee_payer" ],
+        "amount": tdata[ "amount" ],
+        "status": status,
+    }
+    tjson = json.dumps( transaction )
+    alloweduser = tdata[ "user" ]
+    queryinguser = lookupbluser( session_id )
+    if ( winner == "seller" ):
+        remaining_key = escrow_privkey
+    if ( winner == "buyer" ):
+        remaining_key = seller_privkey
+    if ( alloweduser == queryinguser and ( ( tdata[ "status" ] == "all acks" ) or ( tdata[ "status" ] == "needs seller ack" ) ) ):
+        con = sqlite3.connect( "lnescrow.db" )
+        cur = con.cursor()
+        cur.execute( "UPDATE bltransactions SET transaction_data = :transaction_data WHERE transaction_id = :transaction_id",
+                       { "transaction_data": tjson, "transaction_id": tx_id } )
+        con.commit()
+        con.close()
+    if ( alloweduser == queryinguser and ( ( tdata[ "status" ] == "all acks" ) or ( tdata[ "status" ] == "needs seller ack" ) or ( tdata[ "status" ] == "funds received" ) ) ):
+        con = sqlite3.connect( "lnescrow.db" )
+        cur = con.cursor()
+        cur.execute( "SELECT transaction_data from bltransactions WHERE transaction_id = '" + str( transaction[ "id" ] ) + "'" )
+        transaction = cur.fetchone()
+        transaction = transaction[ 0 ]
+        tdata = json.loads( transaction )
+        con.close()
+        status = {
+            "status": "success",
+            "remaining_key": remaining_key,
+            "data": {
+                "id": tdata[ "id" ],
+                "created": tdata[ "created" ],
+                "expires": tdata[ "expires" ],
+                "user": tdata[ "user" ],
+                "buyer_pubkey": tdata[ "buyer_pubkey" ],
+                "seller_pubkey": tdata[ "seller_pubkey" ],
+                "escrow_pubkey": tdata[ "escrow_pubkey" ],
+                "seller_comms_pubkey": tdata[ "seller_comms_pubkey" ],
+                "seller_ack": tdata[ "seller_ack" ],
+                "buyer_ack": tdata[ "buyer_ack" ],
+                "combined_pubkey": tdata[ "combined_pubkey" ],
+                "buyer_encrypted_privkey": tdata[ "buyer_encrypted_privkey" ],
+                "fee_payer": tdata[ "fee_payer" ],
+                "amount": tdata[ "amount" ],
+                "status": tdata[ "status" ],
+            }
+        }
+        sjson = json.dumps( status )
+        return sjson
+    else:
+        return "nice try!"
 
 if __name__ == "__main__":
     app.run( port=1234 )
