@@ -24,7 +24,7 @@ function makeUser( authkey ) {
             var json = {
                     "authkey": authkey
             };
-            xhr.open( 'POST', 'https://app2.lightningescrow.io/setuser/v3/' );
+            xhr.open( 'POST', 'https://app.lightningescrow.io/setuser/v3/' );
             xhr.setRequestHeader( 'Content-Type', 'application/json' );
             xhr.send( JSON.stringify( json ) );
 }
@@ -51,7 +51,7 @@ function logUserIn( authkey ) {
             var json = {
                     "authkey": authkey
             };
-            xhr.open( 'POST', 'https://app2.lightningescrow.io/login/v3/' );
+            xhr.open( 'POST', 'https://app.lightningescrow.io/login/v3/' );
             xhr.setRequestHeader( 'Content-Type', 'application/json' );
             xhr.send( JSON.stringify( json ) );
 }
@@ -72,7 +72,7 @@ function getUser( user_id ) {
                                 alert( "Your request was not processed correctly, please try again." );
                     }
             }
-            xhr.open( 'GET', 'https://app2.lightningescrow.io/getbluser/?user=' + user_id );
+            xhr.open( 'GET', 'https://app.lightningescrow.io/getbluser/?user=' + user_id );
             xhr.setRequestHeader( 'Content-Type', 'application/json' );
             xhr.send();
 }
@@ -96,7 +96,7 @@ function getAllUserTxs( session_id ) {
             var json = {
                     "session_id": session_id
             };
-            xhr.open( 'POST', 'https://app2.lightningescrow.io/getallusertxs/v3/' );
+            xhr.open( 'POST', 'https://app.lightningescrow.io/getallusertxs/v3/' );
             xhr.setRequestHeader( 'Content-Type', 'application/json' );
             xhr.send( JSON.stringify( json ) );
 }
@@ -121,7 +121,7 @@ function getOneTx( session_id, tx_id ) {
                     "session_id": session_id,
                     "tx": tx_id,
             };
-            xhr.open( 'POST', 'https://app2.lightningescrow.io/gettx/v3/' );
+            xhr.open( 'POST', 'https://app.lightningescrow.io/gettx/v3/' );
             xhr.setRequestHeader( 'Content-Type', 'application/json' );
             xhr.send( JSON.stringify( json ) );
 }
@@ -151,7 +151,7 @@ function setTx( session_id, escrowpubkey, commspubkey, escrowprivkey, fee_payer,
                     "fee_payer": fee_payer,
                     "amount": amount,
             };
-            xhr.open( 'POST', 'https://app2.lightningescrow.io/setbltx/' );
+            xhr.open( 'POST', 'https://app.lightningescrow.io/setbltx/' );
             xhr.setRequestHeader( 'Content-Type', 'application/json' );
             xhr.send( JSON.stringify( json ) );
 }
@@ -208,7 +208,7 @@ function acceptContract( pubkey, eprivkey, tx_id, combined_pubkey ) {
                     "tx": tx_id,
                     "combined_pubkey": combined_pubkey,
             };
-            xhr.open( 'POST', 'https://app2.lightningescrow.io/setbuyer/v3/' );
+            xhr.open( 'POST', 'https://app.lightningescrow.io/setbuyer/v3/' );
             xhr.setRequestHeader( 'Content-Type', 'application/json' );
             xhr.send( JSON.stringify( json ) );
 }
@@ -259,7 +259,7 @@ var getJson = new Promise( function( resolve, reject ) {
                     "session_id": session_id,
                     "tx": tx_id,
             };
-            xhr.open( 'POST', 'https://app2.lightningescrow.io/gettx/v3/' );
+            xhr.open( 'POST', 'https://app.lightningescrow.io/gettx/v3/' );
             xhr.setRequestHeader( 'Content-Type', 'application/json' );
             xhr.send( JSON.stringify( json ) );
 });
@@ -316,7 +316,7 @@ function sellerAck( session_id, tx_id ) {
                     "session_id": session_id,
                     "tx": tx_id,
             };
-            xhr.open( 'POST', 'https://app2.lightningescrow.io/sellerack/' );
+            xhr.open( 'POST', 'https://app.lightningescrow.io/sellerack/' );
             xhr.setRequestHeader( 'Content-Type', 'application/json' );
             xhr.send( JSON.stringify( json ) );
 }
@@ -343,7 +343,7 @@ function makeWinner( session_id, tx_id, winner ) {
                     "tx": tx_id,
                         "winner": winner
             };
-            xhr.open( 'POST', 'https://app2.lightningescrow.io/getblkey/' );
+            xhr.open( 'POST', 'https://app.lightningescrow.io/getblkey/' );
             xhr.setRequestHeader( 'Content-Type', 'application/json' );
             xhr.send( JSON.stringify( json ) );
 }
