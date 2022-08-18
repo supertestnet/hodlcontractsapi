@@ -1,4 +1,4 @@
-# Lightning Escrow documentation
+# Documentation for the api endpoints formerly available at lightningescrow.io
 
 # Video demo
 
